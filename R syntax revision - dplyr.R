@@ -62,7 +62,7 @@ test <- select(starts_with(occ))
 # make new variables
 test <- mutate(data, ind = (company == 3)) # create var
 
-test <- transmute(data, ind = (company == 3)) # Create var and remove the company var
+test <- transmute(data, ind = (company == 3)) # Create var and remove the orginal mentioned vars
 
 # apply a function to all vars
 test <- mutate_all(data, function(x){as.factor(x)})
@@ -94,12 +94,19 @@ setdiff(x,y) # rows that appear in x but not y
 union() # no duplicates
 union_all # retains duplicates
 
+### other cheatsheet
+## syntax
+dplyr::glimpse(data)
 
+## reshaping data
+test <- tidyr::gather(data[1:3], "company", "pds", 1:3)
+test <- spread(data[1:2], "company", "busnessrc")
+View(test)
 
-
-
-
-
+test <- tidyr::unite(data, combination, company, busnessrc, product, sep = " ") # combine columns
+View(test)
+test_2 <- tidyr::separate(test, combination , c("company", "busnessrc", "product"), sep = " ")
+View(test_2)
 
 
 
