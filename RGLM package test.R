@@ -1,3 +1,8 @@
+list.of.packages <- c("randomGLM", "tidyverse", "data.table", "plyr", "dummies", "caret")
+new.packages <- list.of.packages[!(list.of.packages %in% 
+                                     installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
 library(randomGLM)
 library(tidyverse)
 library(data.table)
@@ -5,45 +10,43 @@ library(dummies)
 library(caret)
 library(plyr)
 
-attach("./Code/supporting_functions.rda")
+# attach("./Code/supporting_functions.rda")
+source("./Code/supporting_functions_source.R")
 
 ## may need to fix this and get both test and train to load in separately
 set.seed(123)
 setwd('C:/Users/Lance/Dropbox/Programming/R working directory/')
-data_table <- fread('./Data/fire_contents.csv', na.strings=c(''), stringsAsFactors = T)
-data_frame <- as.data.frame(data_table)
+data.in <- fread('./Data/fire_contents.csv', na.strings=c(''), stringsAsFactors = T)
+data.in <- as.data.frame(data.in)
 
 ## process data
-var_list <- c('company', 'channel', 'yearsInsured', 'stateRisk', 'ContStockOtherSI', 'suncorp_household_score', 'target')
-cat_var_list <- c('company', 'channel', 'stateRisk')
+var.list <- c('company', 'channel', 'yearsInsured', 'stateRisk', 'ContStockOtherSI', 'suncorp_household_score', 'target')
+cat.var.list <- c('company', 'channel', 'stateRisk')
 
-data_frame$company <- mapvalues(data_frame$company, 
+data.in$company <- mapvalues(data.in$company, 
                                from=c("3","6","12","13","17"), 
                                to=c("VERO","AAMI","Resilium","GIO","GIO"))
 
-data_subset <- data_frame[, noquote(var_list)]
+data.subset <- data.in[, noquote(var.list)]
                 
-data_subset <- data_subset %>% 
+data.subset <- data.subset %>% 
   mutate_each(funs(as.factor(.)), company, channel, stateRisk)                       
 
 ## one-hot encoding of categorical variables
 
-company_encoding <- as.data.frame(dummy('company', data = data_subset, sep = "", drop = TRUE, fun = as.integer, verbose = FALSE))
-channel_encoding <- as.data.frame(dummy('channel', data = data_subset, sep = "", drop = TRUE, fun = as.integer, verbose = FALSE))
-stateRisk_encoding <- as.data.frame(dummy('stateRisk', data = data_subset, sep = "", drop = TRUE, fun = as.integer, verbose = FALSE))
+company.encoding <- as.data.frame(dummy('company', data = data.subset, sep = "", drop = TRUE, fun = as.integer, verbose = FALSE))
+channel.encoding <- as.data.frame(dummy('channel', data = data.subset, sep = "", drop = TRUE, fun = as.integer, verbose = FALSE))
+stateRisk.encoding <- as.data.frame(dummy('stateRisk', data = data.subset, sep = "", drop = TRUE, fun = as.integer, verbose = FALSE))
 
-data_full <- data.frame(select(data_subset,-c(company,channel,stateRisk)),company_encoding, channel_encoding, stateRisk_encoding)
-
-
-
+data.full <- data.frame(select(data.subset,-c(company,channel,stateRisk)),company.encoding, channel.encoding, stateRisk.encoding)
 
 
 
 ## split data into train and test 
-xTrain <- data_full[1:807,-4]
-yTrain <- data_full[1:807, 4]
-xTest <- data_full[-(1:807),-4]
-yTest <- data_full[-(1:807), 4]
+xTrain <- data.full[1:807,-4]
+yTrain <- data.full[1:807, 4]
+xTest <- data.full[-(1:807),-4]
+yTest <- data.full[-(1:807), 4]
 
 ## fit model
 RGLM <- randomGLM(xTrain,
@@ -90,6 +93,34 @@ coefMean = apply(coefMat, 2, mean)
 names(coefMean) = colnames(xTrain)
 summary(coefMean)
 coefMean[impF]
+
+## Score test data
+xTest$model_score <- predict(RGLM, xTest, type="response")
+xTest$singl_score <- predict(Singl_RGLM, xTest, type="response")
+Test <- data.frame(cbind(xTest, yTest))
+
+Test_2 <- data.table(Test)
+
+## Assess model performance
+CalculateGains(Test_2, "yTest", "model_score")
+CalculateGains(Test, "yTest", "singl_score")
+
+
+CalculateGains(model.data, "renew", "xgb.gbm1.pred", plot=T)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
