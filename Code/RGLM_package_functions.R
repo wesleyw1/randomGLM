@@ -1,4 +1,4 @@
-randomGLM <- function(x, 
+randomGLM_mod <- function(x, 
                       y, 
                       xtest = NULL, 
                       maxInteractionOrder = 1, 
@@ -10,7 +10,7 @@ randomGLM <- function(x,
                       nBags = 100, 
                       replace = TRUE, 
                       sampleWeight = NULL, 
-                      nObsInBag = if (replace) nrow(x) else as.integer(0.632 * nrow(x)), 
+                      nObsInBag = nrow(x), # if (replace) nrow(x) else as.integer(0.632 * nrow(x))
                       nFeaturesInBag = ceiling(ifelse(ncol(x) <= 10, ncol(x), ifelse(ncol(x) <= 300, (1.0276 - 0.00276 *ncol(x)) * ncol(x), ncol(x)/5))), 
                       minInBagObs = min(max(nrow(x)/2, 5), 2 * nrow(x)/3), 
                       nCandidateCovariates = 50, 
@@ -23,8 +23,9 @@ randomGLM <- function(x,
                       interactionSeparatorForCoefNames = ".times.", 
                       randomSeed = 12345, 
                       nThreads = NULL, 
-                      verbose = 0) 
-{
+                      family = fam.var,
+                      link = link.var,
+                      verbose = 0) {
   ySaved = y
   xSaved = x
   if (classify) {
@@ -57,9 +58,9 @@ randomGLM <- function(x,
         if (verbose > 0) 
           .cat.nl("..Working on binary variable ", yBinNames[iy], 
                   " (", iy, " of ", nY, ")")
-        out$binaryPredictors[[iy]] = randomGLM(x = x, 
+        out$binaryPredictors[[iy]] = randomGLM_mod(x = x, 
                                                y = yBin[, iy], xtest = xtest, maxInteractionOrder = maxInteractionOrder, 
-                                               classify = classify, nBags = nBags, replace = replace, 
+                                               classify = classify, nBags = nBags, replace = FALSE, 
                                                sampleWeight = sampleWeight, nObsInBag = nObsInBag, 
                                                nFeaturesInBag = nFeaturesInBag, nCandidateCovariates = nCandidateCovariates, 
                                                corFncForCandidateCovariates = corFncForCandidateCovariates, 
@@ -206,8 +207,7 @@ randomGLM <- function(x,
   for (bag in 1:nBags) {
     yBagVar = 0
     while (yBagVar == 0) {
-      bagSamples = sample(nSamples, nObsInBag, replace = replace, 
-                          prob = sampleWeight)
+      bagSamples = seq(1:nObsInBag) # sample(nSamples, nObsInBag, replace = replace, prob = sampleWeight)
       yBag = y[bagSamples]
       yBagVar = var(yBag, na.rm = TRUE)
       nUniqueInBag = length(unique(bagSamples))
@@ -336,7 +336,7 @@ randomGLM <- function(x,
 }
 
 
-
+######### forwardSelection #########
 .forwardSelection <- function (xBag, yBag, xTestBag, classify, maxInteractionOrder, 
           nCandidateCovariates, corFncForCandidateCovariates, corOptionsForCandidateCovariates, 
           NmandatoryCovariates, interactionsMandatory, keepModel, 
@@ -420,3 +420,161 @@ randomGLM <- function(x,
   rm(list = setdiff(varList, c("out")))
   out
 }
+
+
+predict <- function (object, 
+                     newdata, 
+                     type = c("response", "class"), 
+                     thresholdClassProb = object$thresholdClassProb, 
+                     ...) 
+{
+  type = match.arg(type)
+  if (!is.null(object$binaryPredictors)) {
+    predictions = do.call(cbind, lapply(object$binaryPredictors, 
+                                        predict.randomGLM, newdata = newdata, type = type, 
+                                        thresholdClassProb = thresholdClassProb, ...))
+    if (type == "response") {
+      colnames(predictions) = colnames(object$predictedOOB.response)
+    }
+    else colnames(predictions) = colnames(object$predictedOOB)
+    return(predictions)
+  }
+  if (is.null(object$models)) 
+    stop("The 'object' object must contain the undelying models for prediction.\n", 
+         "   Please re-run the randomGLM function with argument 'keepModels = TRUE' and try again.")
+  if (missing(newdata)) {
+    stop("valid 'newdata' must be given.")
+  }
+  if (ncol(newdata) != object$nFeatures) 
+    stop("Number of columns in 'newdata' differs from the number of features\n", 
+         "     in the original training data.")
+  if (type == "class" & !object$classify) 
+    stop("type='class' is only valid in classification.")
+  if (thresholdClassProb < 0 | thresholdClassProb > 1) 
+    stop("Error: thresholdClassProb takes values between 0  and 1.")
+  .predict.internal(object = object, newdata = newdata, type = type, 
+                    thresholdClassProb = thresholdClassProb, returnBothTypes = FALSE)
+}
+
+.enableThreads <- function (nThreads, verbose) 
+{
+  .disableThreads()
+  if (is.null(nThreads)) 
+    nThreads = max(ceiling(detectCores() * 3/4), detectCores() - 
+                     1)
+  if (is.na(nThreads)) 
+    nThreads = 1
+  if (nThreads < 1) {
+    warning("In function randomGLM: 'nThreads' is below 1. Will use serial execution.")
+    nThreads = 1
+  }
+  if (nThreads > 1) {
+    if (verbose > 1) 
+      .cat.nl("Will use parallel calculation with ", nThreads, 
+              " workers.")
+    if (.Platform$OS.type == "windows") {
+      cluster = makePSOCKcluster(nThreads, outfile = "")
+      assign(".randomGLMparallelCluster", cluster, pos = ".GlobalEnv")
+      clusterExport(cluster, varlist = ls(envir = parent.env(environment()), 
+                                          all.names = TRUE), envir = parent.env(environment()))
+      clusterCall(cluster, library, package = "MASS", 
+                  character.only = TRUE)
+      clusterCall(cluster, library, package = "gtools", 
+                  character.only = TRUE)
+      registerDoParallel(cluster)
+    }
+    else {
+      registerDoParallel(nThreads)
+    }
+  }
+  else {
+    if (verbose > 1) 
+      .cat.nl("Will use serial calculation with a single worker process.")
+    registerDoSEQ()
+  }
+  nThreads
+}
+
+
+.disableThreads <- function () 
+{
+  try(stopCluster(get(".randomGLMparallelCluster", pos = ".GlobalEnv")), 
+      silent = TRUE)
+}
+
+## interactionMatrix
+.interactionMatrix <- function (n, maxOrder, setColNames = TRUE, originalNames = c(1:n), 
+          featureSeparator = ".") 
+{
+  out = NULL
+  for (o in 1:maxOrder) {
+    combs = .combinations(n, o)
+    nameMatrix = array(originalNames[combs], dim = dim(combs))
+    colnames = apply(nameMatrix, 2, paste, collapse = featureSeparator)
+    if (o < maxOrder) 
+      combs = rbind(combs, matrix(0, maxOrder - o, ncol(combs)))
+    if (setColNames) 
+      colnames(combs) = colnames
+    out = cbind(out, combs)
+  }
+  rownames(out) = .spaste("Feature.", c(1:maxOrder))
+  out
+}
+
+.combinations <- function (n, order) 
+{
+  if (order == 1) 
+    return(matrix(c(1:n), 1, n))
+  nOut = choose(n + order - 1, order)
+  out = matrix(0, order, nOut)
+  sub = .combinations(n, order - 1)
+  index = 1
+  for (i in 1:n) {
+    n1 = ncol(sub)
+    out[, index:(index + n1 - 1)] = rbind(rep(i, ncol(sub)), 
+                                          sub)
+    index = index + n1
+    sub = sub[, colSums(sub == i) == 0, drop = FALSE]
+  }
+  out
+}
+
+.spaste <- function (...) 
+{
+  paste(..., sep = "")
+}
+
+.generateInteractions <- function (x, maxOrder, interactionMatrix = NULL, x1 = NULL, 
+                                   setColNames = FALSE, originalNames = c(1:ncol(x))) 
+{
+  n = ncol(x)
+  if (is.null(interactionMatrix)) 
+    interactionMatrix = .interactionMatrix(n, maxOrder, 
+                                           setColNames = setColNames, originalNames = originalNames)
+  if (nrow(interactionMatrix) != maxOrder) 
+    stop("Internal error: nrow(interactionMatrix)!=maxOrder.")
+  if (maxOrder == 1) {
+    x.int = x[, as.vector(interactionMatrix), drop = FALSE]
+  }
+  else {
+    if (is.null(x1)) 
+      x1 = cbind(x, rep(1, nrow(x)))
+    interactionMatrix[interactionMatrix == 0] = n + 1
+    if (ncol(interactionMatrix) == 1) {
+      x.int = as.matrix(apply(x1, 1, .generateInteractions.1row, 
+                              interactionMatrix))
+    }
+    else x.int = t(apply(x1, 1, .generateInteractions.1row, 
+                         interactionMatrix))
+  }
+  if (setColNames) 
+    colnames(x.int) = colnames(interactionMatrix)
+  x.int
+}
+
+
+
+
+
+
+

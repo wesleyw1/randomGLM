@@ -3,6 +3,7 @@ new.packages <- list.of.packages[!(list.of.packages %in%
                                      installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages)
 
+library(rstudioapi)
 library(randomGLM)
 library(tidyverse)
 library(data.table)
@@ -10,8 +11,11 @@ library(dummies)
 library(caret)
 library(plyr)
 
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
 # attach("./Code/supporting_functions.rda")
 source("./Code/supporting_functions_source.R")
+source("./Code/RGLM_package_functions.R")
 
 ## may need to fix this and get both test and train to load in separately
 set.seed(123)
@@ -49,24 +53,109 @@ xTest <- data.full[-(1:807),-4]
 yTest <- data.full[-(1:807), 4]
 
 ## fit model
-RGLM <- randomGLM(xTrain,
-                  yTrain,
-                  classify=F, 
-                  nBags =100,
-                  randomSeed = 123,
-                  nFeaturesInBag = 20,
-                  keepModels=TRUE)
+# simple version
+# RGLM <- randomGLM(xTrain,
+#                   yTrain,
+#                   classify=FALSE, 
+#                   nBags =100,
+#                   randomSeed = 123,
+#                   nFeaturesInBag = 20,
+#                   keepModels=TRUE)
+
+## parameter tuning for RGLM
+nbag <- seq(25, 150, 25)
+model.list <- list()
+CV.list <- list()
+Test <- data.frame(cbind(xTest, yTest))
+
+for (bag.cnt in nbag) {
+  RGLM.CV <- randomGLM(xTrain,
+                    yTrain,
+                    classify = F, 
+                    nBags = bag.cnt,
+                    randomSeed = 123,
+                    nFeaturesInBag = 20,
+                    nCandidateCovariates = 20,
+                    mandatoryCovariates = 2,
+                    keepModels=TRUE)
+  
+  # Store model outputs and gains
+  model.list[[toString(bag.cnt)]] <- RGLM.CV  
+  Test$model_score_test <- predict(model.list[[toString(bag.cnt)]], xTest)
+  CV.list[toString(bag.cnt)] <- CalculateGains(Test, "yTest", "model_score_test")[3]
+  
+  Test <- subset(Test, select = -model_score_test)
+    # Test[, !(names(Test) == "model_score_test")]
+}
+
+CV.list
+# OUTPUT
+# $`25`
+# [1] 0.4329046
+# 
+# $`50`
+# [1] 0.458649
+# 
+# $`75`
+# [1] 0.4607363
+# 
+# $`100`
+# [1] 0.4534114
+# 
+# $`125`
+# [1] 0.4511721
+# 
+# $`150`
+# [1] 0.4527177
 
 ## Single glm iteration
-Singl_RGLM <- randomGLM(xTrain,
-                        yTrain,
-                        classify=F, 
-                        nBags =1,
-                        replace = F,
-                        nObsInBag = 807,
-                        randomSeed = 123,
-                        nFeaturesInBag = 28,
-                        keepModels=TRUE)
+# Singl_RGLM <- randomGLM_mod(xTrain,
+#                         yTrain,
+#                         classify=F, 
+#                         nBags =2,
+#                         replace = TRUE,
+#                         nObsInBag = 807,
+#                         randomSeed = 123,
+#                         nFeaturesInBag = 28,
+#                         nCandidateCovariates = 28,
+#                         verbose = 1,
+#                         nThreads = 2,
+#                         family = Gamma,
+#                         link = log,
+#                         keepModels=TRUE)
+
+# Singl_RGLM <- randomGLM(xTrain,
+#                         yTrain,
+#                         classify=F, 
+#                         nBags =2,
+#                         replace = FALSE,
+#                         nObsInBag = 807,
+#                         randomSeed = 123,
+#                         nFeaturesInBag = 28,
+#                         nCandidateCovariates = 28,
+#                         verbose = 1,
+#                         nThreads = 2,
+#                         keepModels=TRUE)
+# 
+# sample(length(yTrain), 807, replace = FALSE, prob = NULL)
+
+
+# ok <- .forwardSelection(xTrain, 
+#                         yTrain, 
+#                         xTest = NULL, 
+#                         classify = is.factor(y) | length(unique(y)) < 4, 
+#                         maxInteractionOrder = 1, 
+#                         nCandidateCovariates = 28,
+#                         corFncForCandidateCovariates = cor, 
+#                         corOptionsForCandidateCovariates = list(method = "pearson",  use = "p"),
+#                         NmandatoryCovariates = length(NULL), 
+#                         interactionsMandatory = FALSE, 
+#                         keepModel = TRUE, 
+#                         interactionSeparatorForCoefNames = ".times.") 
+
+
+
+
 
 
 ## Feature selection
@@ -77,7 +166,6 @@ table(varImp)
 # select most important features
 impF = colnames(xTrain)[varImp>=5]
 impF
-
 
 ## Coefficients
 coef(RGLM$models[[30]])
@@ -102,7 +190,7 @@ Test <- data.frame(cbind(xTest, yTest))
 Test_2 <- data.table(Test)
 
 ## Assess model performance
-CalculateGains(Test_2, "yTest", "model_score")
+CalculateGains(Test, "yTest", "model_score")
 CalculateGains(Test, "yTest", "singl_score")
 
 
