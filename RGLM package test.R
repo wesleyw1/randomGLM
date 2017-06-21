@@ -1,7 +1,11 @@
-list.of.packages <- c("randomGLM", "tidyverse", "data.table", "plyr", "dummies", "caret")
+list.of.packages <- c("randomGLM", "tidyverse", "data.table", "plyr", "dummies", 
+                      "caret", "rstudioapi", "installr")
 new.packages <- list.of.packages[!(list.of.packages %in% 
                                      installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages)
+
+# library(installr)
+# updateR()
 
 library(rstudioapi)
 library(randomGLM)
@@ -15,7 +19,7 @@ setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 
 # attach("./Code/supporting_functions.rda")
 source("./Code/supporting_functions_source.R")
-source("./Code/RGLM_package_functions.R")
+# source("./Code/RGLM_package_functions.R")
 
 ## may need to fix this and get both test and train to load in separately
 set.seed(123)
@@ -34,7 +38,7 @@ data.in$company <- mapvalues(data.in$company,
 data.subset <- data.in[, noquote(var.list)]
                 
 data.subset <- data.subset %>% 
-  mutate_each(funs(as.factor(.)), company, channel, stateRisk)                       
+  mutate_at(c("company", "channel", "stateRisk"), funs(as.factor(.)))                       
 
 ## one-hot encoding of categorical variables
 
@@ -124,18 +128,20 @@ CV.list
 #                         link = log,
 #                         keepModels=TRUE)
 
-# Singl_RGLM <- randomGLM(xTrain,
-#                         yTrain,
-#                         classify=F, 
-#                         nBags =2,
-#                         replace = FALSE,
-#                         nObsInBag = 807,
-#                         randomSeed = 123,
-#                         nFeaturesInBag = 28,
-#                         nCandidateCovariates = 28,
-#                         verbose = 1,
-#                         nThreads = 2,
-#                         keepModels=TRUE)
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+source("./Code/RGLM_package_functions.R")
+Singl_RGLM <- randomGLM_mod(xTrain,
+                        yTrain,
+                        classify=F,
+                        nBags =1,
+                        replace = FALSE,
+                        nObsInBag = 807,
+                        randomSeed = 123,
+                        nFeaturesInBag = 28,
+                        nCandidateCovariates = 28,
+                        verbose = 1,
+                        nThreads = 1,
+                        keepModels=TRUE)
 # 
 # sample(length(yTrain), 807, replace = FALSE, prob = NULL)
 
@@ -183,20 +189,25 @@ summary(coefMean)
 coefMean[impF]
 
 ## Score test data
-xTest$model_score <- predict(RGLM, xTest, type="response")
-xTest$singl_score <- predict(Singl_RGLM, xTest, type="response")
+xTest$model.score <- predict(model.list[["75"]], xTest, type="response")
+
+#manual score
+xTest <- mutate(xTest, singl.score = 28214.801 + 0.102*ContStockOtherSI + 26185.867*channelBISA + -74055.019*stateRiskACT)
+# xTest$singl_score <- predict.randomGLM_mod(Singl_RGLM, xTest, type="response")
 Test <- data.frame(cbind(xTest, yTest))
 
-Test_2 <- data.table(Test)
+# Test_2 <- data.table(Test)
 
 ## Assess model performance
-CalculateGains(Test, "yTest", "model_score")
-CalculateGains(Test, "yTest", "singl_score")
+CalculateGains(Test, "yTest", "model.score")
+# Model gains   Max gains   Model/max 
+# 0.1705993   0.3702753   0.4607363 
+CalculateGains(Test, "yTest", "singl.score")
+# Model gains   Max gains   Model/max 
+# 0.1553151   0.3702753   0.4194584 
 
-
-CalculateGains(model.data, "renew", "xgb.gbm1.pred", plot=T)
-
-
+setwd('C:/Users/Lance/Dropbox/Programming/R working directory/')
+emb.score.in <- as.data.frame(fread('./Data/fire_cso_size_predval.csv', na.strings=c(''), stringsAsFactors = T))
 
 
 

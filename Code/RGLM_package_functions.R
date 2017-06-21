@@ -94,7 +94,7 @@ randomGLM_mod <- function(x,
       }
       out$levelMatrix = yBinLevels
       out$thresholdClassProb = thresholdClassProb
-      class(out) = c("randomGLM", class(out))
+      class(out) = c("randomGLM_mod", class(out))
       return(out)
     }
     y = as.numeric(as.factor(y)) - 1
@@ -211,7 +211,7 @@ randomGLM_mod <- function(x,
       yBag = y[bagSamples]
       yBagVar = var(yBag, na.rm = TRUE)
       nUniqueInBag = length(unique(bagSamples))
-      if (nUniqueInBag == nSamples | nUniqueInBag < minInBagObs) 
+      if (nUniqueInBag == nSamples & nUniqueInBag < minInBagObs) 
         yBagVar = 0
     }
     bagObsIndx[, bag] = bagSamples
@@ -224,7 +224,7 @@ randomGLM_mod <- function(x,
     }
     out = list()
     bagSamples = bagObsIndx[, bag]
-    oob = c(1:nSamples)[-unique(bagSamples)]
+    oob = c(1:nSamples)
     nOOB = length(oob)
     features = bagFeatures[, bag]
     xBag = x[bagSamples, features, drop = FALSE]
@@ -241,7 +241,7 @@ randomGLM_mod <- function(x,
                            corFncForCandidateCovariates = corFncForCandidateCovariates, 
                            corOptionsForCandidateCovariates = corOptionsForCandidateCovariates, 
                            NmandatoryCovariates = nMandatoryCovariates, interactionsMandatory = interactionsMandatory, 
-                           keepModel = keepModels, interactionSeparatorForCoefNames = interactionSeparatorForCoefNames)
+                           keepModel = TRUE, interactionSeparatorForCoefNames = interactionSeparatorForCoefNames)
     out$predicted = rep(NA, nSamples)
     out$predicted[oob] = pr$predicted[1:nOOB]
     if (doTest) {
@@ -331,7 +331,7 @@ randomGLM_mod <- function(x,
       out$predictedTest = predictedTest
     }
   }
-  class(out) = c("randomGLM", class(out))
+  class(out) = c("randomGLM_mod", class(out))
   out
 }
 
@@ -410,7 +410,7 @@ randomGLM_mod <- function(x,
                                                           colnames(candidateFeatures)), drop = FALSE]
   coefOfForwardRegression = sum$coef[-1, 1]
   interceptOfForwardRegression = sum$coef[1, 1]
-  outHat = predict(model, newdata = as.data.frame(xTest.int), 
+  outHat = stats::predict(model, newdata = as.data.frame(xTest.int), 
                    type = "response")
   out = list(predicted = outHat, candidateFeatures = candidateFeatures, 
              featuresInForwardRegression = featuresInForwardRegression, 
@@ -422,7 +422,7 @@ randomGLM_mod <- function(x,
 }
 
 
-predict <- function (object, 
+predict.randomGLM_mod <- function (object, 
                      newdata, 
                      type = c("response", "class"), 
                      thresholdClassProb = object$thresholdClassProb, 
@@ -431,7 +431,7 @@ predict <- function (object,
   type = match.arg(type)
   if (!is.null(object$binaryPredictors)) {
     predictions = do.call(cbind, lapply(object$binaryPredictors, 
-                                        predict.randomGLM, newdata = newdata, type = type, 
+                                        predict.randomGLM_mod, newdata = newdata, type = type, 
                                         thresholdClassProb = thresholdClassProb, ...))
     if (type == "response") {
       colnames(predictions) = colnames(object$predictedOOB.response)
@@ -573,7 +573,97 @@ predict <- function (object,
 }
 
 
+.cat.nl <- function (...) 
+{
+  cat(.spaste(..., "\n"))
+}
 
+.translate <- function (data, dictionary) 
+{
+  translated = dictionary[match(data, dictionary[, 1]), 2]
+  attributes(translated) = attributes(data)
+  translated
+}
+
+.countsInInteractionMatrix <- function (im, nFeatures) 
+{
+  maxLevel = nrow(im)
+  counts = matrix(0, maxLevel, nFeatures)
+  level = maxLevel - colSums(im == 0)
+  for (l in 1:maxLevel) {
+    mat1 = im[1:l, level == l, drop = FALSE]
+    mat1.unique = sapply(as.data.frame(mat1), unique)
+    counts1 = table(unlist(mat1.unique))
+    where = as.numeric(names(counts1))
+    counts[l, where] = as.numeric(counts1)
+  }
+  rownames(counts) = .spaste("Level.", c(1:maxLevel))
+  counts
+}
+
+.predict.internal <- function (object, newdata, type, thresholdClassProb, returnBothTypes = FALSE) 
+{
+  if (!is.null(newdata)) {
+    nSamples = nrow(newdata)
+    newdata.1 = cbind(newdata, rep(1, nSamples))
+    colnames(newdata) = make.names(colnames(newdata), unique = TRUE)
+  }
+  else {
+    nSamples = length(object$y)
+    x.1 = cbind(object$x, rep(1, nSamples))
+  }
+  nBags = length(object$models)
+  predictedMat = matrix(NA, nSamples, nBags)
+  for (b in 1:nBags) if (inherits(object$models[[b]], "lm")) {
+    bagIM = object$featuresInForwardRegression[[b]]
+    if (!is.null(newdata)) {
+      bagNewData = .generateInteractions(x = newdata, x1 = newdata.1, 
+                                         interactionMatrix = bagIM, maxOrder = object$maxInteractionOrder, 
+                                         setColNames = TRUE)
+      predictedMat[, b] = predict(object$models[[b]], newdata = as.data.frame(bagNewData), 
+                                  type = "response")
+    }
+    else {
+      oob = c(1:nSamples)[-unique(object$bagObsIndx[, b])]
+      bagNewData = .generateInteractions(x = object$x[oob, 
+                                                      ], x1 = x.1[oob, ], interactionMatrix = bagIM, 
+                                         maxOrder = object$maxInteractionOrder, setColNames = TRUE)
+      predictedMat[oob, b] = predict(object$models[[b]], 
+                                     newdata = as.data.frame(bagNewData), type = "response")
+    }
+  }
+  predicted.response = rowMeans(predictedMat, na.rm = TRUE)
+  predicted.response[rowSums(!is.na(predictedMat)) == 0] = NA
+  names(predicted.response) = if (is.null(newdata)) {
+    if (is.null(names(object$y.original))) 
+      rownames(object$x.original)
+    else names(object$y.original)
+  }
+  else rownames(newdata)
+  if (type == "response" | returnBothTypes) {
+    if (object$classify) {
+      out.response = cbind(1 - predicted.response, predicted.response)
+      colnames(out.response) = as.character(object$yLevels)
+    }
+    else {
+      out.response = predicted.response
+    }
+  }
+  if (type == "class" | returnBothTypes) {
+    if (object$classify) {
+      predicted.round = ifelse(predicted.response > thresholdClassProb, 
+                               1, 0)
+      out.class = object$yLevels[predicted.round + 1]
+    }
+    else out.class = predicted.response
+  }
+  if (returnBothTypes) {
+    return(list(response = out.response, class = out.class))
+  }
+  else if (type == "class") 
+    return(out.class)
+  out.response
+}
 
 
 
