@@ -25,6 +25,7 @@ source("./Code/supporting_functions_source.R")
 set.seed(123)
 setwd('C:/Users/Lance/Dropbox/Programming/R working directory/')
 data.in <- fread('./Data/fire_contents.csv', na.strings=c(''), stringsAsFactors = T)
+emb.score <- as.data.frame(fread('./Data/fire_cso_size_predval.csv', na.strings=c(''), stringsAsFactors = T))
 data.in <- as.data.frame(data.in)
 
 ## process data
@@ -48,13 +49,19 @@ stateRisk.encoding <- as.data.frame(dummy('stateRisk', data = data.subset, sep =
 
 data.full <- data.frame(select(data.subset,-c(company,channel,stateRisk)),company.encoding, channel.encoding, stateRisk.encoding)
 
+ind <- 799
+train.prop <- 0.8
+target.loc <- grep("target", colnames(data.full))
 
+## split data into train, CV and test 
+xTrain <- data.full[1:ind,-target.loc][1:floor(train.prop*ind),]
+yTrain <- data.full[1:ind, target.loc][1:floor(train.prop*ind)]
 
-## split data into train and test 
-xTrain <- data.full[1:807,-4]
-yTrain <- data.full[1:807, 4]
-xTest <- data.full[-(1:807),-4]
-yTest <- data.full[-(1:807), 4]
+xCV <- data.full[1:ind,-target.loc][-(1:floor(train.prop*ind)),]
+yCV <- data.full[1:ind, target.loc][-(1:floor(train.prop*ind))]
+
+xTest <- data.full[-(1:ind),-target.loc]
+yTest <- data.full[-(1:ind), target.loc]
 
 ## fit model
 # simple version
@@ -70,9 +77,10 @@ yTest <- data.full[-(1:807), 4]
 nbag <- seq(25, 150, 25)
 model.list <- list()
 CV.list <- list()
-Test <- data.frame(cbind(xTest, yTest))
+CV <- data.frame(cbind(xCV, yCV))
 
 for (bag.cnt in nbag) {
+  paste("now fitting model with number of bags =", bag.cnt, sep = " ")  
   RGLM.CV <- randomGLM(xTrain,
                     yTrain,
                     classify = F, 
@@ -83,101 +91,57 @@ for (bag.cnt in nbag) {
                     mandatoryCovariates = 2,
                     keepModels=TRUE)
   
+
   # Store model outputs and gains
   model.list[[toString(bag.cnt)]] <- RGLM.CV  
-  Test$model_score_test <- predict(model.list[[toString(bag.cnt)]], xTest)
-  CV.list[toString(bag.cnt)] <- CalculateGains(Test, "yTest", "model_score_test")[3]
+  CV$model_score_test <- predict(model.list[[toString(bag.cnt)]], xCV)
+  CV.list[toString(bag.cnt)] <- CalculateGains(CV, "yCV", "model_score_test")[3]
   
-  Test <- subset(Test, select = -model_score_test)
+  CV <- subset(CV, select = -model_score_test)
     # Test[, !(names(Test) == "model_score_test")]
 }
 
 CV.list
 # OUTPUT
 # $`25`
-# [1] 0.4329046
+# [1] 0.4122131
 # 
 # $`50`
-# [1] 0.458649
+# [1] 0.4389428
 # 
 # $`75`
-# [1] 0.4607363
+# [1] 0.4479827
 # 
 # $`100`
-# [1] 0.4534114
+# [1] 0.4473153
 # 
 # $`125`
-# [1] 0.4511721
+# [1] 0.4195315
 # 
 # $`150`
-# [1] 0.4527177
-
-## Single glm iteration
-# Singl_RGLM <- randomGLM_mod(xTrain,
-#                         yTrain,
-#                         classify=F, 
-#                         nBags =2,
-#                         replace = TRUE,
-#                         nObsInBag = 807,
-#                         randomSeed = 123,
-#                         nFeaturesInBag = 28,
-#                         nCandidateCovariates = 28,
-#                         verbose = 1,
-#                         nThreads = 2,
-#                         family = Gamma,
-#                         link = log,
-#                         keepModels=TRUE)
-
-setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
-source("./Code/RGLM_package_functions.R")
-Singl_RGLM <- randomGLM_mod(xTrain,
-                        yTrain,
-                        classify=F,
-                        nBags =1,
-                        replace = FALSE,
-                        nObsInBag = 807,
-                        randomSeed = 123,
-                        nFeaturesInBag = 28,
-                        nCandidateCovariates = 28,
-                        verbose = 1,
-                        nThreads = 1,
-                        keepModels=TRUE)
-# 
-# sample(length(yTrain), 807, replace = FALSE, prob = NULL)
-
-
-# ok <- .forwardSelection(xTrain, 
-#                         yTrain, 
-#                         xTest = NULL, 
-#                         classify = is.factor(y) | length(unique(y)) < 4, 
-#                         maxInteractionOrder = 1, 
-#                         nCandidateCovariates = 28,
-#                         corFncForCandidateCovariates = cor, 
-#                         corOptionsForCandidateCovariates = list(method = "pearson",  use = "p"),
-#                         NmandatoryCovariates = length(NULL), 
-#                         interactionsMandatory = FALSE, 
-#                         keepModel = TRUE, 
-#                         interactionSeparatorForCoefNames = ".times.") 
-
-
-
-
+# [1] 0.417666
+best.bag.cnt <- 75 # manually adjust this after CV
 
 
 ## Feature selection
-varImp = RGLM$timesSelectedByForwardRegression
+varImp = model.list[[toString(best.bag.cnt)]]$timesSelectedByForwardRegression
 sum(varImp>0)
 varImp
 table(varImp)
+
+
+empty <- varImp[order(sapply(varImp,'[[',1))]
+
+
 # select most important features
 impF = colnames(xTrain)[varImp>=5]
 impF
 
 ## Coefficients
-coef(RGLM$models[[30]])
+coef(model.list[[toString(best.bag.cnt)]]$models[[30]])
 
-nBags = length(RGLM$featuresInForwardRegression)
-coefMat = matrix(0, nBags, RGLM$nFeatures)
+nBags = length(model.list[[toString(best.bag.cnt)]]$featuresInForwardRegression)
+coefMat = matrix(0, nBags, model.list[[toString(best.bag.cnt)]]$nFeatures)
 for (i in 1:nBags)
 {
   coefMat[i, RGLM$featuresInForwardRegression[[i]]] = RGLM$coefOfForwardRegression[[i]]
@@ -188,26 +152,44 @@ names(coefMean) = colnames(xTrain)
 summary(coefMean)
 coefMean[impF]
 
+## Single tree randomGLM with no replacement
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+source("./Code/RGLM_package_functions.R")
+Singl_RGLM <- randomGLM_mod(xTrain,
+                            yTrain,
+                            classify=F,
+                            nBags =1,
+                            replace = FALSE,
+                            nObsInBag = ind,
+                            randomSeed = 123,
+                            nFeaturesInBag = 28,
+                            nCandidateCovariates = 28,
+                            verbose = 1,
+                            nThreads = 1,
+                            keepModels=TRUE)
+
 ## Score test data
 xTest$model.score <- predict(model.list[["75"]], xTest, type="response")
 
 #manual score
 xTest <- mutate(xTest, singl.score = 28214.801 + 0.102*ContStockOtherSI + 26185.867*channelBISA + -74055.019*stateRiskACT)
 # xTest$singl_score <- predict.randomGLM_mod(Singl_RGLM, xTest, type="response")
-Test <- data.frame(cbind(xTest, yTest))
+Test <- data.frame(cbind(xTest, yTest, emb.score))
 
 # Test_2 <- data.table(Test)
 
 ## Assess model performance
-CalculateGains(Test, "yTest", "model.score")
+
+CalculateGains(Test, "yTest", "model.score") # randomGLM with CVed trees
 # Model gains   Max gains   Model/max 
 # 0.1705993   0.3702753   0.4607363 
-CalculateGains(Test, "yTest", "singl.score")
+CalculateGains(Test, "yTest", "singl.score") # randomGLM with one tree
 # Model gains   Max gains   Model/max 
 # 0.1553151   0.3702753   0.4194584 
+CalculateGains(Test, "yTest", "EmblemPred")
+
 
 setwd('C:/Users/Lance/Dropbox/Programming/R working directory/')
-emb.score.in <- as.data.frame(fread('./Data/fire_cso_size_predval.csv', na.strings=c(''), stringsAsFactors = T))
 
 
 
